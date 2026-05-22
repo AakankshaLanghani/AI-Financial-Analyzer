@@ -5,7 +5,7 @@ import ICSLogo, { ICSMark } from './components/ICSLogo';
 import LoginPage from './components/LoginPage';
 import ChangeCredentials from './components/ChangeCredentials';
 
-const BACKEND = 'http://localhost:8000';
+const BACKEND = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
 
 export default function App() {
   const [token, setToken]         = useState(null);
