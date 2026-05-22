@@ -632,6 +632,31 @@ def _detect_comparison_periods(q: str, time_filters: Dict) -> List[str]:
 # MAIN PUBLIC ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# GENERAL QUESTION DETECTOR
+# ─────────────────────────────────────────────────────────────────────────────
+
+_GENERAL_SIGNALS = [
+    "what does the data", "what does this data", "what does it tell",
+    "tell me about", "overview", "summarize", "summary", "give me a summary",
+    "key insights", "what can you tell", "give me an overview",
+    "what is this data", "about the data", "about this data",
+    "what do you see", "analyze this", "analyse this",
+    "what should i know", "what stands out", "explain the data",
+    "describe the data", "insights from", "what are the highlights",
+    "overall picture", "big picture", "in general", "what is going on",
+    "whats going on", "what's going on", "can you explain", "explain this",
+    "what do we have", "what does this tell", "give me insights",
+    "walk me through", "break it down", "what does it mean",
+    "what is happening", "general overview", "data overview",
+]
+
+def is_general_question(question: str) -> bool:
+    """Return True if the question is open-ended and wants a data overview."""
+    q = question.lower().strip()
+    return any(signal in q for signal in _GENERAL_SIGNALS)
+
+
 def build_query_plan(question: str, parsed: dict) -> QueryPlan:
     """
     Convert a natural language financial question into a deterministic

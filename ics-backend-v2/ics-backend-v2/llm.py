@@ -266,3 +266,124 @@ def generate_explanation(
 
     except Exception as e:
         raise Exception(f"LLM error: {e}") from e
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OVERVIEW EXPLANATION  — for general / open-ended questions
+# ─────────────────────────────────────────────────────────────────────────────
+
+_OVERVIEW_SYSTEM_PROMPT = (
+    "You are a senior financial analyst giving a plain-English overview of a dataset.\n\n"
+    "RULES:\n"
+    "1. Use ONLY the PYTHON-COMPUTED values provided. Never recalculate, estimate, or fabricate.\n"
+    "2. Write a clear, business-friendly overview: what the dataset covers, key totals, "
+    "top performers, and 1–2 notable insights.\n"
+    "3. Do not assume a currency symbol unless it appears in the data.\n"
+    "4. Keep it concise and natural — no bullet lists, no headers, flowing sentences.\n"
+    "5. Cover the most important dimensions (product, region, salesperson, category) if present.\n\n"
+    "RESPONSE FORMAT — strict JSON, no extra keys:\n"
+    "{\n"
+    "  \"answer\": \"One sentence: what the dataset is and its headline number\",\n"
+    "  \"explanation\": \"3–5 sentences covering key totals, top performers across dimensions, and a standout insight\",\n"
+    "  \"caveats\": \"\"\n"
+    "}"
+)
+
+
+def _build_overview_context(overview: dict) -> str:
+    lines = ["=" * 54,
+             "  PYTHON-COMPUTED DATA OVERVIEW  (use verbatim — do not recalculate)",
+             "=" * 54]
+
+    for sheet in overview.get("sheets", []):
+        lines.append(f"\nSheet: {sheet['name']}  |  Type: {sheet['table_type']}  |  Rows: {sheet['row_count']}")
+
+        totals = sheet.get("totals", {})
+        if totals:
+            lines.append("  Key Totals (PYTHON-COMPUTED):")
+            for k, v in totals.items():
+                if k == "gp_margin_pct":
+                    lines.append(f"    GP Margin: {v:.1f}%")
+                elif k == "quantity":
+                    lines.append(f"    Total Quantity: {v:,.0f}")
+                else:
+                    label = k.replace("_", " ").title()
+                    lines.append(f"    Total {label}: {v:,.0f}  ({v/1e6:.2f}M)")
+
+        dim_counts = sheet.get("dim_counts", {})
+        if dim_counts:
+            parts = [f"{v} {k.replace('_',' ')}s" for k, v in dim_counts.items()]
+            lines.append(f"  Dimensions: {', '.join(parts)}")
+
+        rankings = sheet.get("rankings", {})
+        for dim, info in rankings.items():
+            top = info["top"]
+            metric = info["metric"].replace("_", " ").title()
+            dim_label = dim.replace("_", " ").title()
+            lines.append(f"  Top {dim_label}s by {metric}:")
+            for label, val in top:
+                lines.append(f"    - {label}: {val:,.0f}  ({val/1e6:.2f}M)")
+
+        gp_rankings = sheet.get("gp_rankings", {})
+        for dim, info in gp_rankings.items():
+            dim_label = dim.replace("_", " ").title()
+            h_label, h_val = info["highest"]
+            l_label, l_val = info["lowest"]
+            lines.append(f"  GP Margin by {dim_label}: highest = {h_label} ({h_val:.1f}%), lowest = {l_label} ({l_val:.1f}%)")
+
+    return "\n".join(lines)
+
+
+def generate_overview_explanation(question: str, overview: dict, api_key: str) -> dict:
+    """
+    Generate a natural-language business overview for general/open-ended questions.
+    All numbers come from the pre-computed overview dict — LLM only narrates.
+    """
+    context  = _build_overview_context(overview)
+    user_msg = (
+        f"QUESTION: {question}\n\n"
+        f"{context}\n\n"
+        "Use the PYTHON-COMPUTED values above exactly. Respond in strict JSON only."
+    )
+
+    total_rows = sum(s.get("row_count", 0) for s in overview.get("sheets", []))
+    client     = OpenAI(api_key=api_key)
+    response   = None
+
+    try:
+        response = client.chat.completions.create(
+            model           = "gpt-4o-mini",
+            messages        = [
+                {"role": "system", "content": _OVERVIEW_SYSTEM_PROMPT},
+                {"role": "user",   "content": user_msg},
+            ],
+            temperature     = 0.0,
+            max_tokens      = 600,
+            response_format = {"type": "json_object"},
+        )
+
+        raw    = response.choices[0].message.content
+        parsed = json.loads(raw)
+
+        return {
+            "answer":            parsed.get("answer",      "Cannot be determined."),
+            "explanation":       parsed.get("explanation", ""),
+            "caveats":           parsed.get("caveats",     ""),
+            "row_count":         total_rows,
+            "formula":           "",
+            "validation_passed": True,
+        }
+
+    except json.JSONDecodeError:
+        raw_text = response.choices[0].message.content if response else "No response."
+        return {
+            "answer":            raw_text,
+            "explanation":       "",
+            "caveats":           "",
+            "row_count":         total_rows,
+            "formula":           "",
+            "validation_passed": True,
+        }
+
+    except Exception as e:
+        raise Exception(f"LLM overview error: {e}") from e

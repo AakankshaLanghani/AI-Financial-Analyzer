@@ -19,24 +19,49 @@ import uuid
 import os
 import time
 from collections import OrderedDict
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from datetime import datetime, timedelta, timezone
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import Optional
 import io
 from dotenv import load_dotenv
+from jose import JWTError, jwt
 
 from parser import parse_workbook
-from query_planner import build_query_plan
+from query_planner import build_query_plan, is_general_question
 from analytics_engine import execute_plan
 from validation_engine import validate_result
-from llm import generate_explanation
+from llm import generate_explanation, generate_overview_explanation
+from overview_engine import compute_overview
 from report_engine import generate_report
 
 load_dotenv()
 
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+
+# ── Auth config ───────────────────────────────────────────────────────────────
+APP_EMAIL        = os.getenv("APP_EMAIL", "")
+APP_PASSWORD     = os.getenv("APP_PASSWORD", "")
+JWT_SECRET       = os.getenv("JWT_SECRET", "changeme")
+JWT_ALGORITHM    = "HS256"
+JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "8"))
+
+bearer_scheme = HTTPBearer()
+
+def create_access_token(email: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
+    return jwt.encode({"sub": email, "exp": expire}, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("sub") != APP_EMAIL:
+            raise HTTPException(status_code=401, detail="Invalid token.")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Token expired or invalid. Please log in again.")
 
 # ── Upload safety limits ──────────────────────────────────────────────────────
 _MAX_UPLOAD_BYTES: int = int(os.getenv("UPLOAD_MAX_MB", "50")) * 1_048_576
@@ -84,9 +109,71 @@ app.add_middleware(
 )
 
 
+class LoginRequest(BaseModel):
+    email:    str
+    password: str
+
+class ChangeCredentialsRequest(BaseModel):
+    current_password: str
+    new_email:        str
+    new_password:     str
+
 class AskRequest(BaseModel):
     session_id: str
     question:   str
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGIN  (public — no auth required)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/login")
+def login(req: LoginRequest):
+    if req.email.strip().lower() != APP_EMAIL.lower() or req.password != APP_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    token = create_access_token(APP_EMAIL)
+    return {"access_token": token, "token_type": "bearer", "expires_in_hours": JWT_EXPIRE_HOURS}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CHANGE CREDENTIALS  (protected — must be logged in)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/change-credentials")
+def change_credentials(req: ChangeCredentialsRequest, _: None = Depends(verify_token)):
+    global APP_EMAIL, APP_PASSWORD
+
+    # Verify current password
+    if req.current_password != APP_PASSWORD:
+        raise HTTPException(status_code=401, detail="Current password is incorrect.")
+
+    # Validate new email
+    new_email = req.new_email.strip()
+    if not new_email or "@" not in new_email or "." not in new_email.split("@")[-1]:
+        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+
+    # Validate new password strength
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
+
+    # Update in-memory credentials (takes effect immediately)
+    APP_EMAIL    = new_email
+    APP_PASSWORD = req.new_password
+
+    # Persist to .env so changes survive a local restart
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    try:
+        with open(env_path, "r") as f:
+            content = f.read()
+        import re as _re
+        content = _re.sub(r"^APP_EMAIL=.*$",    f"APP_EMAIL={APP_EMAIL}",    content, flags=_re.MULTILINE)
+        content = _re.sub(r"^APP_PASSWORD=.*$", f"APP_PASSWORD={APP_PASSWORD}", content, flags=_re.MULTILINE)
+        with open(env_path, "w") as f:
+            f.write(content)
+    except Exception:
+        pass  # Non-fatal: in-memory update already applied
+
+    return {"message": "Credentials updated successfully. Please log in with your new credentials."}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -113,7 +200,7 @@ def health():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), _: None = Depends(verify_token)):
     fname = (file.filename or "").strip()
     if not fname.lower().endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="Only .xlsx and .xls files are supported.")
@@ -153,7 +240,7 @@ async def upload_file(file: UploadFile = File(...)):
         {
             "name":       s["sheet_name"],
             "rows":       len(s["rows"]),
-            "columns":    s["original_columns"],
+            "columns":    s["columns"],          # normalized semantic types (sales, gross_profit, etc.)
             "table_type": s.get("table_type", "UNKNOWN"),
         }
         for s in parsed["sheets"]
@@ -173,7 +260,7 @@ async def upload_file(file: UploadFile = File(...)):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/ask")
-async def ask_question(req: AskRequest):
+async def ask_question(req: AskRequest, _: None = Depends(verify_token)):
     session = sessions.get(req.session_id)
     if not session:
         raise HTTPException(
@@ -192,6 +279,11 @@ async def ask_question(req: AskRequest):
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     parsed = session["parsed"]
+
+    # ── General / overview question → separate path, existing pipeline untouched ──
+    if is_general_question(question):
+        overview = compute_overview(parsed)
+        return generate_overview_explanation(question, overview, OPENAI_API_KEY)
 
     # ── Step 1: Build deterministic query plan ────────────────────────────────
     plan = build_query_plan(question, parsed)
@@ -274,7 +366,7 @@ async def ask_question(req: AskRequest):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/report")
-async def generate_pdf_report(req: AskRequest):
+async def generate_pdf_report(req: AskRequest, _: None = Depends(verify_token)):
     """
     Generate a full PDF analytics report for an uploaded workbook.
     Uses session_id to retrieve parsed data (re-uses the /upload session).
@@ -312,7 +404,7 @@ async def generate_pdf_report(req: AskRequest):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/session/{session_id}")
-def get_session_info(session_id: str):
+def get_session_info(session_id: str, _: None = Depends(verify_token)):
     session = sessions.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found or expired.")

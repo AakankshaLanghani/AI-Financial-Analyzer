@@ -23,6 +23,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.ticker as mticker
 import numpy as np
 
 from reportlab.lib.pagesizes import A4
@@ -61,17 +62,13 @@ W, H = A4  # 595 x 842 pt
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _fmt(val: Optional[float], is_pct: bool = False) -> str:
+    """All monetary figures are expressed in millions (e.g. 1,200,000 → 1.20M)."""
     if val is None:
         return "N/A"
     if is_pct:
         return f"{val:.1f}%"
-    if abs(val) >= 1e9:
-        return f"{val / 1e9:.2f}B"
-    if abs(val) >= 1e6:
-        return f"{val / 1e6:.2f}M"
-    if abs(val) >= 1e3:
-        return f"{val:,.0f}"
-    return f"{val:.2f}"
+    # Always show in millions regardless of magnitude
+    return f"{val / 1e6:.2f}M"
 
 
 def _run_query(question: str, parsed: dict) -> AnalyticsResult:
@@ -92,18 +89,20 @@ def _hbar_chart(
     labels: List[str],
     values: List[float],
     title: str,
-    color: str = "#C31D27",
+    color = "#C31D27",        # str OR list of str (one per bar)
     fmt_pct: bool = False,
     width_in: float = 6.5,
     height_in: float = 3.2,
+    legend_items: List[Tuple[str, str]] = None,  # [(label, hex_color), ...]
 ) -> io.BytesIO:
-    """Horizontal bar chart — returns PNG bytes."""
+    """Horizontal bar chart — returns PNG bytes. color may be a single hex or a list."""
     n = len(labels)
     fig, ax = plt.subplots(figsize=(width_in, max(height_in, n * 0.45 + 0.6)))
     fig.patch.set_facecolor("white")
 
     y = np.arange(n)
-    bars = ax.barh(y, values, color=color, height=0.6,
+    bar_colors = color if isinstance(color, list) else [color] * n
+    bars = ax.barh(y, values, color=bar_colors, height=0.6,
                    edgecolor="none", zorder=3)
 
     # Value labels
@@ -130,7 +129,81 @@ def _hbar_chart(
     ax.spines["bottom"].set_color("#e5e7eb")
     ax.tick_params(axis="x", labelsize=8, colors="#9ca3af")
     ax.tick_params(axis="y", length=0)
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e6:.0f}M"))
+    if legend_items:
+        patches = [mpatches.Patch(color=c, label=l) for l, c in legend_items]
+        ax.legend(handles=patches, loc="lower right", fontsize=8, frameon=False)
     plt.tight_layout(pad=0.6)
+    return _chart_bytes(fig)
+
+
+def _hbar_gp_chart(
+    labels: List[str],
+    values: List[float],
+    title: str,
+    avg: float,
+    max_items: int = 12,
+    width_in: float = 6.8,
+) -> io.BytesIO:
+    """
+    Horizontal bar chart for GP% by category — capped at max_items rows so
+    labels never crowd. Green = above average, red = below. Dashed avg line.
+    """
+    # Cap: show top half + bottom half if there are more than max_items
+    if len(labels) > max_items:
+        half = max_items // 2
+        keep_idx = list(range(half)) + list(range(len(labels) - half, len(labels)))
+        labels = [labels[i] for i in keep_idx]
+        values = [values[i] for i in keep_idx]
+        truncated = True
+    else:
+        truncated = False
+
+    n = len(labels)
+    height_in = max(3.2, n * 0.38)
+    fig, ax = plt.subplots(figsize=(width_in, height_in))
+    fig.patch.set_facecolor("white")
+
+    y = np.arange(n)
+    bar_colors = ["#059669" if v >= avg else "#C31D27" for v in values]
+    bars = ax.barh(y, values, color=bar_colors, height=0.55,
+                   edgecolor="none", zorder=3)
+
+    # Value labels beside each bar
+    max_v = max(values) if values else 100
+    for bar, val in zip(bars, values):
+        ax.text(val + max_v * 0.012, bar.get_y() + bar.get_height() / 2,
+                f"{val:.1f}%", va="center", ha="left",
+                fontsize=8, color="#374151", fontweight="600")
+
+    # Average reference line
+    ax.axvline(avg, color="#6b7280", linewidth=1.2, linestyle="--", zorder=4, alpha=0.85)
+    ax.text(avg + max_v * 0.01, n - 0.4, f"Avg {avg:.1f}%",
+            va="top", ha="left", fontsize=7.5,
+            color="#6b7280", fontstyle="italic")
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=9, color="#1a1f2e")
+    ax.invert_yaxis()
+    suffix = f" (top & bottom {max_items // 2} shown)" if truncated else ""
+    ax.set_title(title + suffix, fontsize=11, fontweight="700",
+                 color="#1a1f2e", pad=10, loc="left")
+    ax.set_xlim(0, max_v * 1.22)
+    ax.grid(axis="x", color="#f3f4f6", linewidth=0.8, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#e5e7eb")
+    ax.spines["bottom"].set_color("#e5e7eb")
+    ax.tick_params(axis="x", labelsize=8, colors="#9ca3af")
+    ax.tick_params(axis="y", length=0)
+
+    above_patch = mpatches.Patch(color="#059669", label="Above average")
+    below_patch = mpatches.Patch(color="#C31D27", label="Below average")
+    ax.legend(handles=[above_patch, below_patch], loc="lower right",
+              fontsize=8, frameon=False)
+
+    plt.tight_layout(pad=0.7)
     return _chart_bytes(fig)
 
 
@@ -138,15 +211,28 @@ def _pie_chart(
     labels: List[str],
     values: List[float],
     title: str,
+    grand_total: Optional[float] = None,
     width_in: float = 4.0,
     height_in: float = 3.5,
 ) -> io.BytesIO:
+    """
+    grand_total: if provided, slice labels show % of grand_total (all products),
+    not % of the slice sum. This keeps the chart honest when only top-N are shown.
+    """
     fig, ax = plt.subplots(figsize=(width_in, height_in))
     fig.patch.set_facecolor("white")
     colors_list = CHART_PALETTE[:len(labels)]
+
+    denom = grand_total if (grand_total and grand_total > 0) else sum(values)
+
+    def _autopct(pct_of_slice_sum):
+        # matplotlib passes % relative to the pie's own total; convert back to absolute
+        actual = pct_of_slice_sum / 100.0 * sum(values)
+        return f"{actual / denom * 100:.1f}%"
+
     wedges, texts, autotexts = ax.pie(
         values, labels=None, colors=colors_list,
-        autopct="%1.1f%%", pctdistance=0.82,
+        autopct=_autopct, pctdistance=0.82,
         startangle=90, wedgeprops=dict(linewidth=0.5, edgecolor="white"),
     )
     for t in autotexts:
@@ -277,6 +363,12 @@ class _ReportDoc(SimpleDocTemplate):
         self._filename = filename
         self._page_num = 0
 
+    def handle_pageBegin(self):
+        """Draw cover background BEFORE any flowables are rendered on page 1."""
+        super().handle_pageBegin()
+        if self._page_num == 0:
+            _draw_cover_background(self.canv, self)
+
     def handle_pageEnd(self):
         self._page_num += 1
         canvas = self.canv
@@ -291,10 +383,8 @@ class _ReportDoc(SimpleDocTemplate):
         canvas.setLineWidth(0.5)
         canvas.line(0, H - 38, W, H - 38)
         canvas.setFont("Helvetica-Bold", 9)
-        canvas.setFillColor(ICS_RED)
-        canvas.drawString(28, H - 24, "ICS")
         canvas.setFillColor(ICS_DARK)
-        canvas.drawString(48, H - 24, "AI Financial Analyzer")
+        canvas.drawString(28, H - 24, "AI Financial Analyzer")
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(ICS_GREY)
         canvas.drawRightString(W - 28, H - 24, f"Page {self._page_num - 1}")
@@ -307,7 +397,7 @@ class _ReportDoc(SimpleDocTemplate):
         canvas.setFillColor(ICS_GREY)
         canvas.drawCentredString(
             W / 2, 10,
-            f"Report generated by AI Financial Analyzer — ICS  ·  {self._filename}  ·  "
+            f"Report generated by AI Financial Analyzer  ·  {self._filename}  ·  "
             f"{datetime.datetime.now().strftime('%d %b %Y')}",
         )
         canvas.restoreState()
@@ -318,59 +408,127 @@ class _ReportDoc(SimpleDocTemplate):
 # SECTION BUILDERS
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _draw_cover_background(canvas, doc):
+    """
+    Canvas callback — drawn BEFORE flowables so everything sits on top.
+    Adds a professional dark header band, red accent strip, and footer bar.
+    """
+    canvas.saveState()
+
+    # ── Dark header band ──────────────────────────────────────────────────────
+    canvas.setFillColor(ICS_DARK)
+    canvas.rect(0, H - 110, W, 110, fill=1, stroke=0)
+
+    # Red accent strip at the bottom of the dark band
+    canvas.setFillColor(ICS_RED)
+    canvas.rect(0, H - 116, W, 6, fill=1, stroke=0)
+
+    # Wordmark inside the band
+    canvas.setFillColor(colors.white)
+    canvas.setFont("Helvetica-Bold", 16)
+    canvas.drawCentredString(W / 2, H - 68, "AI Financial Analyzer")
+    canvas.setFillColor(colors.HexColor("#6b7280"))
+    canvas.setFont("Helvetica", 8.5)
+    canvas.drawCentredString(W / 2, H - 100, "Intelligent. Accurate. Instant.")
+
+    # ── Light footer bar ──────────────────────────────────────────────────────
+    canvas.setFillColor(colors.HexColor("#f8f9fa"))
+    canvas.rect(0, 0, W, 36, fill=1, stroke=0)
+    canvas.setStrokeColor(colors.HexColor("#e5e7eb"))
+    canvas.setLineWidth(0.5)
+    canvas.line(0, 36, W, 36)
+    canvas.setFont("Helvetica", 7.5)
+    canvas.setFillColor(colors.HexColor("#9ca3af"))
+    canvas.drawCentredString(
+        W / 2, 14,
+        f"Confidential  ·  Generated by AI Financial Analyzer  ·  "
+        f"{datetime.datetime.now().strftime('%d %B %Y')}",
+    )
+
+    canvas.restoreState()
+
+
 def _cover_page(filename: str, parsed: dict, S: dict) -> list:
     sheet_count = len(parsed.get("sheets", []))
     total_rows  = sum(len(s.get("rows", [])) for s in parsed.get("sheets", []))
     date_str    = datetime.datetime.now().strftime("%d %B %Y")
 
     story = []
-    story.append(Spacer(1, 60))
 
-    # Logo
-    logo_d = _ics_logo_drawing(width=160, height=48)
-    story.append(_drawing_flowable(logo_d, 160, 48, align="center"))
-    story.append(Spacer(1, 28))
+    # Push content below the 116 pt dark header band
+    story.append(Spacer(1, 130))
 
-    # Title
-    story.append(Paragraph("Financial Analytics Report", S["h1"]))
-    story.append(Spacer(1, 6))
+    # ── Title block ───────────────────────────────────────────────────────────
+    story.append(Paragraph(
+        "Financial Analytics Report",
+        ParagraphStyle(
+            "cover_h1", fontSize=27, fontName="Helvetica-Bold",
+            textColor=ICS_DARK, alignment=TA_CENTER,
+            spaceAfter=6, letterSpacing=-0.5,
+        ),
+    ))
 
-    # File pill
-    story.append(Paragraph(f"<b>{filename}</b>", ParagraphStyle(
-        "fc", fontSize=13, fontName="Helvetica-Bold",
-        textColor=ICS_RED, alignment=TA_CENTER, spaceAfter=4,
-    )))
-    story.append(Spacer(1, 4))
+    story.append(Spacer(1, 20))
+
+    # ── File info ─────────────────────────────────────────────────────────────
+    story.append(Paragraph(
+        f"<b>{filename}</b>",
+        ParagraphStyle(
+            "fc", fontSize=12, fontName="Helvetica-Bold",
+            textColor=ICS_RED, alignment=TA_CENTER, spaceAfter=6,
+        ),
+    ))
     story.append(Paragraph(
         f"{sheet_count} sheet(s)  ·  {total_rows:,} rows  ·  Generated {date_str}",
-        S["cover_sub"],
+        ParagraphStyle(
+            "cover_meta", fontSize=9.5, fontName="Helvetica",
+            textColor=ICS_GREY, alignment=TA_CENTER, spaceAfter=0,
+        ),
+    ))
+    story.append(Spacer(1, 32))
+
+    # ── Description blurb ─────────────────────────────────────────────────────
+    story.append(Paragraph(
+        "This report was automatically generated by the AI Financial Analyzer. "
+        "All metrics are computed deterministically from your uploaded data — "
+        "no estimates, no hallucinations.",
+        ParagraphStyle(
+            "cc", fontSize=9.5, fontName="Helvetica", textColor=ICS_GREY,
+            alignment=TA_CENTER, leading=16, spaceAfter=0,
+        ),
     ))
     story.append(Spacer(1, 36))
 
-    # Divider
-    story.append(HRFlowable(width="60%", thickness=1.5, color=ICS_RED,
-                             spaceBefore=0, spaceAfter=24, hAlign="CENTER"))
-
-    story.append(Paragraph(
-        "This report was automatically generated by the ICS AI Financial Analyzer. "
-        "All metrics are computed deterministically from your uploaded data — "
-        "no estimates, no hallucinations.",
-        ParagraphStyle("cc", fontSize=10, fontName="Helvetica", textColor=ICS_GREY,
-                       alignment=TA_CENTER, leading=17),
-    ))
-    story.append(Spacer(1, 12))
-
-    # Contents list
+    # ── Table of contents ─────────────────────────────────────────────────────
     contents = [
-        "KPI Summary", "Sales Breakdown", "Profitability Analysis",
-        "Customer & Product Detail", "AI Insights",
+        ("1", "KPI Summary"),
+        ("2", "Sales Breakdown"),
+        ("3", "Profitability Analysis"),
+        ("4", "Customer & Product Detail"),
+        ("5", "AI Insights"),
     ]
-    tbl_data = [[Paragraph(f"<b>{i+1}.</b>  {c}", S["body"])] for i, c in enumerate(contents)]
-    tbl = Table(tbl_data, colWidths=[220])
+    tbl_data = []
+    for num, label in contents:
+        tbl_data.append([
+            Paragraph(f"<b>{num}</b>", ParagraphStyle(
+                f"cn{num}", fontSize=10, fontName="Helvetica-Bold",
+                textColor=ICS_RED, alignment=TA_CENTER,
+            )),
+            Paragraph(label, ParagraphStyle(
+                f"cl{num}", fontSize=10, fontName="Helvetica",
+                textColor=ICS_DARK,
+            )),
+        ])
+    tbl = Table(tbl_data, colWidths=[32, 200])
     tbl.setStyle(TableStyle([
-        ("TOPPADDING",    (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING",    (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ("LEFTPADDING",   (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 12),
+        ("LINEBELOW",     (0, 0), (-1, -2), 0.4, colors.HexColor("#e5e7eb")),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#fafafa")),
+        ("BOX",           (0, 0), (-1, -1), 0.4, colors.HexColor("#e5e7eb")),
     ]))
     story.append(_centred(tbl))
 
@@ -386,26 +544,36 @@ def _kpi_section(parsed: dict, S: dict) -> list:
                              spaceBefore=2, spaceAfter=10))
 
     # Compute KPIs
+    # fmt_type: "money" → millions, "pct" → %, "count" → comma-separated integer
     kpis = []
-    for q, label, is_pct in [
-        ("What were the total sales?",           "Total Sales",     False),
-        ("What was the total gross profit?",      "Gross Profit",    False),
-        ("What was the overall gross profit margin?", "GP Margin",   True),
-        ("What is the total quantity sold?",      "Total Quantity",  False),
+    for q, label, fmt_type in [
+        ("What were the total sales?",               "Total Sales",    "money"),
+        ("What was the total gross profit?",          "Gross Profit",   "money"),
+        ("What was the overall gross profit margin?", "GP Margin",      "pct"),
+        ("What is the total quantity sold?",          "Total Quantity", "count"),
     ]:
         try:
             r = _run_query(q, parsed)
             val = r.scalar_value
         except Exception:
             val = None
-        kpis.append((label, val, is_pct))
+        kpis.append((label, val, fmt_type))
 
-    # Add row count
+    # Row count — always a plain integer, never formatted in millions
     total_rows = sum(len(s.get("rows", [])) for s in parsed.get("sheets", []))
-    kpis.append(("Data Records", float(total_rows), False))
+    kpis.append(("Data Records", float(total_rows), "count"))
 
-    def _kpi_cell(label: str, val: Optional[float], is_pct: bool, accent: str):
-        val_str = _fmt(val, is_pct) if val is not None else "N/A"
+    def _fmt_kpi(val: Optional[float], fmt_type: str) -> str:
+        if val is None:
+            return "N/A"
+        if fmt_type == "pct":
+            return f"{val:.1f}%"
+        if fmt_type == "count":
+            return f"{int(val):,}"
+        return _fmt(val)   # "money" → millions
+
+    def _kpi_cell(label: str, val: Optional[float], fmt_type: str, accent: str):
+        val_str = _fmt_kpi(val, fmt_type)
         return Table(
             [[Paragraph(val_str, ParagraphStyle(
                 "kv", fontSize=18, fontName="Helvetica-Bold",
@@ -416,7 +584,7 @@ def _kpi_section(parsed: dict, S: dict) -> list:
         )
 
     accents = ["#C31D27", "#059669", "#2563eb", "#7c3aed", "#374151"]
-    cards = [_kpi_cell(l, v, p, accents[i % len(accents)]) for i, (l, v, p) in enumerate(kpis)]
+    cards = [_kpi_cell(l, v, t, accents[i % len(accents)]) for i, (l, v, t) in enumerate(kpis)]
 
     # Layout: 3 + 2 or 5 in a row
     row1 = cards[:3]
@@ -436,31 +604,6 @@ def _kpi_section(parsed: dict, S: dict) -> list:
         story.append(tbl)
         story.append(Spacer(1, 10))
 
-    # Sheets table
-    story.append(Spacer(1, 6))
-    story.append(Paragraph("Workbook Structure", S["h3"]))
-    sheets = parsed.get("sheets", [])
-    tbl_data = [["Sheet Name", "Rows", "Table Type"]]
-    for s in sheets:
-        tbl_data.append([
-            s.get("sheet_name", ""), str(len(s.get("rows", []))),
-            s.get("table_type", "UNKNOWN"),
-        ])
-    tbl = Table(tbl_data, colWidths=[200, 70, 130])
-    tbl.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, 0),  ICS_DARK),
-        ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
-        ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
-        ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
-        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, colors.HexColor("#f9fafb")]),
-        ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#e5e7eb")),
-        ("TOPPADDING",    (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
-        ("ALIGN",         (0, 0), (-1, 0),  "CENTER"),
-        ("ALIGN",         (1, 1), (2, -1),  "CENTER"),
-    ]))
-    story.append(tbl)
     story.append(PageBreak())
     return story
 
@@ -472,35 +615,36 @@ def _sales_breakdown(parsed: dict, S: dict) -> list:
     story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#e5e7eb"),
                              spaceBefore=2, spaceAfter=10))
 
-    # ── Sales by region / division ────────────────────────────────────────────
-    region_result = None
-    for q in ["What is the total sales for each region?",
-              "What is total sales by division?",
-              "What is total sales by department?"]:
+    # ── Sales by city ─────────────────────────────────────────────────────────
+    city_result = None
+    for q in ["What is total sales by city?",
+              "What is the total sales for each city?",
+              "What is the total sales for each region?",
+              "What is total sales by division?"]:
         try:
             r = _run_query(q, parsed)
             if r.groups and len(r.groups) >= 2:
-                region_result = r
+                city_result = r
                 break
         except Exception:
             pass
 
-    if region_result:
-        labels  = [g.label for g in region_result.groups]
-        values  = [g.value or 0 for g in region_result.groups]
+    if city_result:
+        labels  = [g.label for g in city_result.groups]
+        values  = [g.value or 0 for g in city_result.groups]
         total_v = sum(values)
         top3_v  = sum(values[:3])
-        top     = region_result.groups[0]
-        bottom  = region_result.groups[-1]
-        buf = _hbar_chart(labels, values, "Sales by Region / Division",
+        top     = city_result.groups[0]
+        bottom  = city_result.groups[-1]
+        buf = _hbar_chart(labels, values, "Sales by City",
                           color="#2563eb", width_in=6.8,
                           height_in=max(3.0, len(labels) * 0.5))
         desc = (
-            f"<b>{top.label}</b> leads regional sales at <b>{_fmt(top.value)}</b>, "
+            f"<b>{top.label}</b> leads city sales at <b>{_fmt(top.value)}</b>, "
             f"contributing {(top.value or 0)/total_v*100:.1f}% of total revenue. "
-            f"The top 3 regions collectively account for "
+            f"The top 3 cities collectively account for "
             f"{top3_v/total_v*100:.1f}% of all sales. "
-            f"<b>{bottom.label}</b> is the lowest-contributing region "
+            f"<b>{bottom.label}</b> is the lowest-contributing city "
             f"at <b>{_fmt(bottom.value)}</b>."
         )
         story.append(KeepTogether([_img_flowable(buf, W - 80), _chart_desc(desc, S)]))
@@ -521,14 +665,14 @@ def _sales_breakdown(parsed: dict, S: dict) -> list:
 
     if cat_result:
         all_groups = sorted(cat_result.groups, key=lambda g: g.value or 0, reverse=True)
-        top8       = all_groups[:8]
-        labels     = [g.label for g in top8]
-        values     = [g.value or 0 for g in top8]
+        top5       = all_groups[:5]
+        labels     = [g.label for g in top5]
+        values     = [g.value or 0 for g in top5]
         total_v    = sum(g.value or 0 for g in all_groups)
         top1_pct   = values[0] / total_v * 100 if total_v else 0
         top3_pct   = sum(values[:3]) / total_v * 100 if total_v else 0
 
-        buf = _hbar_chart(labels, values, "Sales by Product Category (Top 8)",
+        buf = _hbar_chart(labels, values, "Sales by Product (Top 5)",
                           color="#C31D27", width_in=6.8,
                           height_in=max(3.0, len(labels) * 0.5))
         desc = (
@@ -542,8 +686,9 @@ def _sales_breakdown(parsed: dict, S: dict) -> list:
         story.append(KeepTogether([_img_flowable(buf, W - 80), _chart_desc(desc, S)]))
 
         # Pie chart
-        if len(top8) <= 8:
-            buf2 = _pie_chart(labels, values, "Category Share of Sales")
+        if len(top5) <= 8:
+            buf2 = _pie_chart(labels, values, "Product Share of Sales (Top 5)",
+                              grand_total=total_v)
             top3_str = ", ".join(
                 f"{labels[i]} ({values[i]/total_v*100:.1f}%)" for i in range(min(3, len(labels)))
             )
@@ -560,43 +705,6 @@ def _sales_breakdown(parsed: dict, S: dict) -> list:
                 _img_flowable(buf2, 280, hAlign="CENTER", max_height=240),
                 _chart_desc(pie_desc, S),
             ]))
-
-    # ── Full ranked table ─────────────────────────────────────────────────────
-    ranked_result = None
-    for q in ["What are total sales by product?",
-              "What are total sales by product category?"]:
-        try:
-            r = _run_query(q, parsed)
-            if r.groups and len(r.groups) >= 2:
-                ranked_result = r
-                break
-        except Exception:
-            pass
-
-    if ranked_result:
-        story.append(Spacer(1, 10))
-        story.append(Paragraph("Full Ranked Table — Sales by Product/Category", S["h3"]))
-        tbl_data = [["Rank", "Name", "Sales", "% of Total"]]
-        total = sum(g.value or 0 for g in ranked_result.groups)
-        for i, g in enumerate(ranked_result.groups, 1):
-            pct = f"{(g.value or 0) / total * 100:.1f}%" if total else "-"
-            tbl_data.append([str(i), g.label, _fmt(g.value), pct])
-        tbl = Table(tbl_data, colWidths=[35, 220, 100, 70], repeatRows=1)
-        tbl.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, 0), ICS_DARK),
-            ("TEXTCOLOR",     (0, 0), (-1, 0), colors.white),
-            ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
-             [colors.white, colors.HexColor("#f9fafb")]),
-            ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#e5e7eb")),
-            ("TOPPADDING",    (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
-            ("ALIGN",         (0, 0), (0, -1),  "CENTER"),
-            ("ALIGN",         (2, 1), (-1, -1), "RIGHT"),
-        ]))
-        story.append(tbl)
 
     story.append(PageBreak())
     return story
@@ -627,16 +735,21 @@ def _profitability(parsed: dict, S: dict) -> list:
         values  = [g.value or 0 for g in groups]
         avg_gp  = sum(values) / len(values) if values else 0
         above   = sum(1 for v in values if v > avg_gp)
-        buf = _hbar_chart(labels, values, "Gross Profit Margin % by Category",
-                          color="#059669", fmt_pct=True,
-                          width_in=6.8, height_in=max(3.0, len(labels) * 0.48))
+        buf = _hbar_gp_chart(
+            labels, values,
+            "Gross Profit Margin % by Product",
+            avg=avg_gp,
+            max_items=10,
+            width_in=6.8,
+        )
         desc = (
-            f"<b>{labels[0]}</b> achieves the highest GP margin at <b>{values[0]:.1f}%</b>, "
-            f"while <b>{labels[-1]}</b> has the lowest at <b>{values[-1]:.1f}%</b>. "
-            f"The average GP margin across all categories is {avg_gp:.1f}%, "
-            f"with {above} of {len(labels)} categories performing above average. "
+            f"<b>{labels[0]}</b> achieves the highest GP margin at <b>{values[0]:.1f}%</b> "
+            f"(green), while <b>{labels[-1]}</b> has the lowest at "
+            f"<b>{values[-1]:.1f}%</b> (red). "
+            f"The dashed line marks the category average of <b>{avg_gp:.1f}%</b>, "
+            f"with {above} of {len(labels)} categories performing above it. "
             f"Wide variation in margins indicates differences in pricing strategy "
-            f"or cost structure across products."
+            f"or cost structure across product lines."
         )
         story.append(KeepTogether([_img_flowable(buf, W - 80), _chart_desc(desc, S)]))
         story.append(Spacer(1, 8))
@@ -654,15 +767,16 @@ def _profitability(parsed: dict, S: dict) -> list:
             pass
 
     if sp_result:
-        groups  = sorted(sp_result.groups, key=lambda g: g.value or 0, reverse=True)[:10]
+        all_groups = sorted(sp_result.groups, key=lambda g: g.value or 0, reverse=True)
+        total_v    = sum(g.value or 0 for g in all_groups)   # full team total
+        groups  = all_groups[:5]
         labels  = [g.label for g in groups]
         values  = [g.value or 0 for g in groups]
-        total_v = sum(values)
         top2_v  = sum(values[:2])
         gap_pct = ((values[0] - values[1]) / values[1] * 100
                    if len(values) > 1 and values[1] else 0)
 
-        buf = _hbar_chart(labels, values, "Gross Profit by Salesperson (Top 10)",
+        buf = _hbar_chart(labels, values, "Gross Profit by Salesperson (Top 5)",
                           color="#C31D27",
                           width_in=6.8, height_in=max(3.0, len(labels) * 0.48))
         desc = (
@@ -675,28 +789,6 @@ def _profitability(parsed: dict, S: dict) -> list:
         )
         story.append(KeepTogether([_img_flowable(buf, W - 80), _chart_desc(desc, S)]))
 
-        # Leaderboard table — keep header + all rows together if short enough
-        story.append(Spacer(1, 10))
-        tbl_data = [["Rank", "Salesperson", "Gross Profit", "Rows"]]
-        for i, g in enumerate(groups, 1):
-            tbl_data.append([str(i), g.label, _fmt(g.value), str(g.row_count)])
-        tbl = Table(tbl_data, colWidths=[35, 200, 120, 70])
-        tbl.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, 0), ICS_DARK),
-            ("TEXTCOLOR",     (0, 0), (-1, 0), colors.white),
-            ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("BACKGROUND",    (0, 1), (-1, 1), colors.HexColor("#fff7f7")),
-            ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
-            ("ROWBACKGROUNDS", (0, 2), (-1, -1),
-             [colors.white, colors.HexColor("#f9fafb")]),
-            ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#e5e7eb")),
-            ("TOPPADDING",    (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
-            ("ALIGN",         (0, 0), (0, -1), "CENTER"),
-            ("ALIGN",         (2, 1), (-1, -1), "RIGHT"),
-        ]))
-        story.append(KeepTogether([Paragraph("Salesperson Leaderboard", S["h3"]), tbl]))
 
     story.append(PageBreak())
     return story
@@ -729,7 +821,7 @@ def _customer_product(parsed: dict, S: dict) -> list:
         top_pct = (top.value or 0) / total_v * 100 if total_v else 0
         top2_pct = sum(values[:2]) / total_v * 100 if total_v else 0
 
-        buf = _hbar_chart(labels, values, "Sales by Customer Type",
+        buf = _hbar_chart(labels, values, "Sales by Product Category",
                           color="#ea580c",
                           width_in=6.8, height_in=max(2.5, len(labels) * 0.52))
         desc = (
@@ -755,55 +847,56 @@ def _customer_product(parsed: dict, S: dict) -> list:
         except Exception:
             pass
 
-    if prod_result:
-        top5    = sorted(prod_result.groups, key=lambda g: g.value or 0, reverse=True)[:5]
-        bottom5 = sorted(prod_result.groups, key=lambda g: g.value or 0)[:5]
+    # Top/Bottom product tables removed as requested
 
-        story.append(KeepTogether([
-            Paragraph("Top 5 Products by Sales", S["h3"]),
-            _rank_table(top5, "#C31D27"),
-        ]))
-        story.append(Spacer(1, 12))
-        story.append(KeepTogether([
-            Paragraph("Bottom 5 Products by Sales", S["h3"]),
-            _rank_table(bottom5, "#6b7280"),
-        ]))
-
-    # ── Sales by City / Region ────────────────────────────────────────────────
-    city_result = None
-    for q in ["What is the total sales for each region?",
-              "What is total sales by city?"]:
+    # ── Sales by Sales Person ─────────────────────────────────────────────────
+    salesperson_result = None
+    for q in ["What are total sales by salesperson?",
+              "What is total sales by sales person?",
+              "What are total sales for each salesperson?"]:
         try:
             r = _run_query(q, parsed)
             if r.groups and len(r.groups) >= 2:
-                city_result = r
+                salesperson_result = r
                 break
         except Exception:
             pass
 
-    if city_result:
-        tbl_data = [["City / Region", "Sales"]]
-        for g in city_result.groups:
-            tbl_data.append([g.label, _fmt(g.value)])
-        tbl = Table(tbl_data, colWidths=[250, 120])
-        tbl.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, 0), ICS_DARK),
-            ("TEXTCOLOR",     (0, 0), (-1, 0), colors.white),
-            ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
-             [colors.white, colors.HexColor("#f9fafb")]),
-            ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#e5e7eb")),
-            ("TOPPADDING",    (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
-            ("ALIGN",         (1, 1), (1, -1), "RIGHT"),
-        ]))
-        story.append(Spacer(1, 14))
-        # KeepTogether so the heading never strands at the bottom of a page
+    if salesperson_result:
+        all_sp  = sorted(salesperson_result.groups, key=lambda g: g.value or 0, reverse=True)
+        total_v = sum(g.value or 0 for g in all_sp)
+        top5_sp = all_sp[:5]
+        bot5_sp = all_sp[-5:] if len(all_sp) >= 5 else all_sp
+        # combine top5 + bottom5 (deduplicated, keeping order)
+        seen = set()
+        combined = []
+        for g in top5_sp + list(bot5_sp):
+            if g.label not in seen:
+                seen.add(g.label)
+                combined.append(g)
+        labels  = [g.label for g in combined]
+        values  = [g.value or 0 for g in combined]
+        top_pct = (top5_sp[0].value or 0) / total_v * 100 if total_v else 0
+
+        top5_labels = {g.label for g in top5_sp}
+        bar_colors  = ["#2563eb" if l in top5_labels else "#ea580c" for l in labels]
+        buf = _hbar_chart(labels, values, "Sales by Sales Person (Top 5 & Bottom 5)",
+                          color=bar_colors,
+                          width_in=6.8, height_in=max(3.0, len(labels) * 0.48),
+                          legend_items=[("Top 5", "#2563eb"), ("Bottom 5", "#ea580c")])
+        desc = (
+            f"<b>{top5_sp[0].label}</b> is the top performer with <b>{_fmt(top5_sp[0].value)}</b> in sales "
+            f"({top_pct:.1f}% of total team sales). "
+            f"The top 3 salespeople together account for "
+            f"{sum(g.value or 0 for g in top5_sp[:3])/total_v*100:.1f}% of all revenue. "
+            f"Identifying best practices from top performers can help elevate "
+            f"the rest of the team."
+        )
+        story.append(Spacer(1, 12))
         story.append(KeepTogether([
-            Paragraph("Sales by City / Region", S["h3"]),
-            tbl,
+            Paragraph("Sales by Sales Person", S["h3"]),
+            _img_flowable(buf, W - 80),
+            _chart_desc(desc, S),
         ]))
 
     story.append(PageBreak())
@@ -819,6 +912,30 @@ def _rank_table(groups, accent_hex: str):
     tbl = Table(tbl_data, colWidths=[30, 220, 110, 65])
     tbl.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, 0), colors.HexColor(accent_hex)),
+        ("TEXTCOLOR",     (0, 0), (-1, 0), colors.white),
+        ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+         [colors.white, colors.HexColor("#f9fafb")]),
+        ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#e5e7eb")),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+        ("ALIGN",         (0, 0), (0, -1), "CENTER"),
+        ("ALIGN",         (2, 1), (-1, -1), "RIGHT"),
+    ]))
+    return tbl
+
+
+def _salesperson_table(groups, grand_total: float):
+    """Ranked table of all salespeople by sales value."""
+    tbl_data = [["#", "Sales Person", "Sales", "Share"]]
+    for i, g in enumerate(groups, 1):
+        pct = f"{(g.value or 0) / grand_total * 100:.1f}%" if grand_total else "-"
+        tbl_data.append([str(i), g.label, _fmt(g.value), pct])
+    tbl = Table(tbl_data, colWidths=[30, 220, 110, 65])
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0), colors.HexColor("#2563eb")),
         ("TEXTCOLOR",     (0, 0), (-1, 0), colors.white),
         ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
@@ -938,12 +1055,11 @@ def _ai_insights(parsed: dict, S: dict, api_key: str) -> list:
     ))
     story.append(Spacer(1, 8))
     story.append(Paragraph(
-        "<b>Report generated by AI Financial Analyzer — ICS</b>",
+        "<b>Report generated by AI Financial Analyzer</b>",
         ParagraphStyle("brand", fontSize=8.5, fontName="Helvetica-Bold",
                        textColor=ICS_RED, alignment=TA_CENTER),
     ))
     return story
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LAYOUT HELPERS

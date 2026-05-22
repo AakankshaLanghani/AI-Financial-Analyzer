@@ -175,7 +175,7 @@ const QUESTION_GUIDE = [
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function UploadPanel({ onFileUploaded, fileInfo, onSampleQuestion }) {
+export default function UploadPanel({ onFileUploaded, fileInfo, onSampleQuestion, token }) {
   const [dragging,   setDragging]   = useState(false);
   const [uploading,  setUploading]  = useState(false);
   const [error,      setError]      = useState('');
@@ -199,7 +199,11 @@ export default function UploadPanel({ onFileUploaded, fileInfo, onSampleQuestion
     const formData = new FormData();
     formData.append('file', file);
     try {
-      const res = await fetch('http://localhost:8000/upload', { method: 'POST', body: formData });
+      const res = await fetch('http://localhost:8000/upload', {
+        method: 'POST',
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+        body: formData,
+      });
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Upload failed'); }
       const data = await res.json();
       onFileUploaded(data);
