@@ -324,6 +324,7 @@ export default function App() {
           fileInfo={fileInfo}
           onSampleQuestion={handleSampleQuestion}
           token={token}
+          backendUrl={BACKEND}
         />
 
         {/* ── CHAT AREA ── */}
