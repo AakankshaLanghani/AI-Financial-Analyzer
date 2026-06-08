@@ -1,93 +1,339 @@
-# ICS Financial Analyzer Agent
+# ICS AI Financial Analyzer
 
+> AI-powered financial data analysis platform — upload Excel data, ask questions in plain English, and generate professional PDF reports instantly.
 
+---
 
-## Getting started
+## Table of Contents
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+- [Overview](#overview)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Backend Setup](#backend-setup)
+  - [Frontend Setup](#frontend-setup)
+- [Environment Variables](#environment-variables)
+- [API Reference](#api-reference)
+- [Deployment](#deployment)
+- [Data Format](#data-format)
+- [How It Works](#how-it-works)
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+---
 
-## Add your files
+## Overview
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+ICS AI Financial Analyzer is a full-stack web application that allows business users to upload monthly sales/financial data (Excel), interact with it via a natural language chatbot, and download auto-generated PDF analytics reports — all without writing a single line of code or formula.
+
+---
+
+## Features
+
+- **Excel Upload** — Supports `.xlsx` files with auto-detection of column types regardless of header casing or spacing
+- **AI Chatbot** — Ask financial questions in plain English (e.g. *"which city had the highest GP%?"*, *"how many customers are overdue?"*)
+- **PDF Report Generation** — Professionally formatted multi-page PDF with KPIs, charts, and customer detail tables
+- **Accurate Computations** — All analytics computed deterministically in Python (pandas); LLM only writes the explanation, never the numbers
+- **JWT Authentication** — Secure login with configurable credentials
+- **Flexible Column Detection** — Fuzzy matching handles variations in header names across different monthly files
+
+---
+
+## Architecture
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/icsgroup.development/ics-financial-analyzer-agent.git
-git branch -M main
-git push -uf origin main
+┌─────────────────────────────────────────────────────┐
+│                   React Frontend                     │
+│          (Upload → Chat → Download Report)          │
+└──────────────────────┬──────────────────────────────┘
+                       │ HTTPS / REST
+┌──────────────────────▼──────────────────────────────┐
+│                  FastAPI Backend                     │
+│                                                      │
+│  /upload  →  parser.py       (Excel → parsed dict)  │
+│  /ask     →  query_planner   (NL → QueryPlan)        │
+│           →  analytics_engine (QueryPlan → Result)   │
+│           →  llm.py          (Result → Explanation)  │
+│  /report  →  report_engine   (parsed → PDF)          │
+└──────────────────────────────────────────────────────┘
 ```
 
-## Integrate with your tools
+**Key design principle:** The LLM never touches raw data or computes numbers. All aggregations, rankings, and percentage calculations are done in Python. The LLM only generates business-language explanations from pre-computed results.
 
-* [Set up project integrations](https://gitlab.com/icsgroup.development/ics-financial-analyzer-agent/-/settings/integrations)
+---
 
-## Collaborate with your team
+## Tech Stack
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+| Layer | Technology |
+|---|---|
+| Frontend | React 18, CSS Modules |
+| Backend | FastAPI, Python 3.11 |
+| Data Processing | Pandas, OpenPyXL |
+| PDF Generation | ReportLab, Matplotlib |
+| AI / NLP | OpenAI GPT-4o-mini |
+| Authentication | JWT (PyJWT) |
+| Frontend Hosting | Vercel |
+| Backend Hosting | Hugging Face Spaces |
 
-## Test and Deploy
+---
 
-Use the built-in continuous integration in GitLab.
+## Project Structure
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+```
+ICS AI Financial Analyzer/
+│
+├── files/
+│   ├── ics-backend-v2/
+│   │   └── ics-backend-v2/
+│   │       ├── main.py               # FastAPI app, routes, session management
+│   │       ├── parser.py             # Excel parser + column fingerprinting
+│   │       ├── query_planner.py      # NL question → QueryPlan dataclass
+│   │       ├── analytics_engine.py   # Deterministic pandas computations
+│   │       ├── report_engine.py      # PDF report builder (ReportLab)
+│   │       ├── kpi_engine.py         # Weighted ratio registry (GP%, margins)
+│   │       ├── llm.py                # LLM explanation layer (OpenAI)
+│   │       ├── validation_engine.py  # Finance-grade sanity checks
+│   │       ├── overview_engine.py    # General data overview computations
+│   │       ├── requirements.txt
+│   │       └── Dockerfile
+│   │
+│   └── ics-frontend-v2/
+│       └── ics-frontend-v2/
+│           ├── src/
+│           │   ├── App.js            # Main app component
+│           │   └── ...
+│           └── package.json
+│
+└── hf-space/                         # Hugging Face Spaces deployment copy
+    ├── main.py
+    ├── parser.py
+    ├── query_planner.py
+    ├── analytics_engine.py
+    ├── report_engine.py
+    ├── kpi_engine.py
+    ├── llm.py
+    └── requirements.txt
+```
 
-***
+---
 
-# Editing this README
+## Getting Started
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+### Prerequisites
 
-## Suggestions for a good README
+- Python 3.11+
+- Node.js 18+
+- An OpenAI API key
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+### Backend Setup
 
-## Name
-Choose a self-explaining name for your project.
+```powershell
+# Navigate to backend directory
+cd "files\ics-backend-v2\ics-backend-v2"
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+# Create and activate virtual environment
+py -3.11 -m venv venv
+.\venv\Scripts\Activate.ps1
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+# Install dependencies
+pip install -r requirements.txt
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+# Create .env file (see Environment Variables section)
+# Then start the server
+uvicorn main:app --reload --port 8000
+```
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+Backend will be running at `http://localhost:8000`
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+### Frontend Setup
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+```powershell
+# Open a second terminal
+cd "files\ics-frontend-v2\ics-frontend-v2"
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+# Install dependencies
+npm install
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+# Start the development server
+npm start
+```
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+Frontend will open at `http://localhost:3000`
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+---
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+## Environment Variables
+
+Create a `.env` file in `files/ics-backend-v2/ics-backend-v2/`:
+
+```env
+# OpenAI — required for chatbot explanations
+OPENAI_API_KEY=sk-...
+
+# App login credentials
+APP_EMAIL=your@email.com
+APP_PASSWORD=YourPassword
+
+# JWT secret — use a long random string in production
+JWT_SECRET=your-secret-key-here
+JWT_EXPIRE_HOURS=8
+
+# Optional
+UPLOAD_MAX_MB=50
+MAX_SESSIONS=50
+```
+
+> **Never commit `.env` to version control.** It is listed in `.gitignore`.
+
+---
+
+## API Reference
+
+All endpoints except `/health` require a Bearer token obtained from `/login`.
+
+### `POST /login`
+```json
+{ "email": "demo@example.com", "password": "password" }
+```
+Returns: `{ "access_token": "...", "token_type": "bearer" }`
+
+---
+
+### `POST /upload`
+Upload an Excel file. Returns a `session_id` used for all subsequent requests.
+
+**Form data:** `file` (`.xlsx`)
+
+Returns:
+```json
+{
+  "session_id": "abc123",
+  "sheets": [{ "name": "Sheet1", "rows": 319, "table_type": "PRODUCT_SALES" }],
+  "total_rows": 319
+}
+```
+
+---
+
+### `POST /ask`
+Ask a natural language question about the uploaded data.
+
+```json
+{ "session_id": "abc123", "question": "which city had the highest sales?" }
+```
+
+Returns:
+```json
+{
+  "answer": "1. Quetta: 15,919,407 (15.92M)",
+  "explanation": "Quetta leads in sales, indicating strong market demand in that region.",
+  "caveats": "",
+  "row_count": 319,
+  "formula": "SUM(Sale) grouped by city"
+}
+```
+
+---
+
+### `POST /report`
+Generate and download a PDF analytics report.
+
+```json
+{ "session_id": "abc123", "question": "" }
+```
+
+Returns: PDF binary (`Content-Disposition: attachment; filename=report.pdf`)
+
+---
+
+## Deployment
+
+### Frontend — Vercel
+
+1. Push the `ics-frontend-v2` directory to your repository
+2. Connect the repo to [vercel.com](https://vercel.com)
+3. Set the root directory to `files/ics-frontend-v2/ics-frontend-v2`
+4. Set environment variable: `REACT_APP_API_URL=https://your-hf-space.hf.space`
+5. Deploy
+
+### Backend — Hugging Face Spaces
+
+1. Go to [huggingface.co/spaces](https://huggingface.co/spaces) → Create Space → Docker
+2. Get your User Access Token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) (Write access)
+3. Authenticate and push:
+
+```powershell
+cd hf-space
+git remote set-url origin https://YOUR_HF_USERNAME:YOUR_HF_TOKEN@huggingface.co/spaces/YOUR_HF_USERNAME/YOUR_SPACE_NAME
+git add .
+git commit -m "deploy: updated backend"
+git push origin main
+```
+
+4. Add secrets in the Space settings:
+   - `OPENAI_API_KEY`
+   - `APP_EMAIL`
+   - `APP_PASSWORD`
+   - `JWT_SECRET`
+
+---
+
+## Data Format
+
+The application is designed for monthly sales/receivables data. Expected columns (header names are flexible — the parser uses fuzzy matching):
+
+| Column | Description |
+|---|---|
+| `Customer Name` | Customer identifier |
+| `Credit Term` | Payment terms (e.g. "CREDIT 60 DAYS") |
+| `Credit Limit` | Approved credit ceiling |
+| `Business-Type` | Category (Wholesaler, Distributor, Hospital, Retail Pharmacy) |
+| `City` | Customer city |
+| `Region` | Sales region |
+| `Sale` | Total sales amount |
+| `GP` | Gross profit amount |
+| `GP%` | Gross profit percentage |
+| `Total Received` | Amount collected |
+| `Received_Before Due Date` | Collections received before due date |
+| `Received_After Due Date` | Collections received after due date |
+| `Payment Status` | On Time / Delayed / Overdue / Partial |
+| `Avg Payment Days` | Average days taken to pay |
+
+> Headers must stay consistent across months. Data rows can change freely.
+
+---
+
+## How It Works
+
+### Column Detection
+The parser normalises column headers (strips spaces, hyphens, underscores, lowercases) and matches them against a vocabulary registry. This means `"avg payment days"`, `"Avg Payment Days"`, and `"AVG_PAYMENT_DAYS"` all resolve to the same internal type.
+
+### Query Pipeline
+```
+User question
+    → query_planner.py   detects metric, operation, group_by, filters
+    → analytics_engine   executes pandas computation deterministically
+    → validation_engine  checks for data anomalies
+    → llm.py             GPT-4o-mini writes explanation (numbers come from pandas, not LLM)
+    → JSON response
+```
+
+### GP% Accuracy
+Gross profit percentages are **always** computed as `SUM(GP) / SUM(Sale) × 100`. The GP% column in Excel is never summed or averaged directly — this prevents the common mistake of averaging percentages across unequal sales bases.
+
+### PDF Report Sections
+1. KPI Summary (Total Sales, GP, GP%, Collections, Avg Payment Days)
+2. Sales by City / Region / Business Type
+3. Top & Bottom 10 Customers by Sales
+4. Top & Bottom 10 Customers by GP
+5. Profitability Analysis (GP% with amounts)
+6. Receivables & Collections (before/after due date)
+7. Customer Detail Table (Top 10 by Sales with full metrics)
+8. AI Insights
+
+---
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Internal use only — ICS Group. Not for public distribution.
