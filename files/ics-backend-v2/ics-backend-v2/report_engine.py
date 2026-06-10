@@ -849,6 +849,46 @@ def _stacked_hbar_chart(labels, vals_a, vals_b, title, lab_a, lab_b,
     return _chart_bytes(fig)
 
 
+def _grouped_hbar_chart(labels, vals_a, vals_b, title, lab_a, lab_b,
+                        col_a="#059669", col_b="#ea580c", width_in=6.8):
+    """Grouped horizontal bar chart — 2 side-by-side bars per customer."""
+    n = len(labels)
+    hi = max(4.0, n * 0.60 + 0.8)
+    fig, ax = plt.subplots(figsize=(width_in, hi))
+    fig.patch.set_facecolor("white")
+    bar_h = 0.35
+    y = np.arange(n)
+    bars_a = ax.barh(y - bar_h/2, vals_a, height=bar_h, color=col_a,
+                     edgecolor="none", zorder=3, label=lab_a)
+    bars_b = ax.barh(y + bar_h/2, vals_b, height=bar_h, color=col_b,
+                     edgecolor="none", zorder=3, label=lab_b)
+    max_v = max(max(vals_a + vals_b, default=1), 1)
+    for bar, val in zip(bars_a, vals_a):
+        if val > 0:
+            ax.text(val + max_v*0.01, bar.get_y() + bar.get_height()/2,
+                    f"{val/1e6:.2f}M", va="center", ha="left", fontsize=7, color="#1a1f2e")
+    for bar, val in zip(bars_b, vals_b):
+        if val > 0:
+            ax.text(val + max_v*0.01, bar.get_y() + bar.get_height()/2,
+                    f"{val/1e6:.2f}M", va="center", ha="left", fontsize=7, color="#1a1f2e")
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=8.5, color="#1a1f2e")
+    ax.invert_yaxis()
+    ax.set_title(title, fontsize=11, fontweight="700", color="#1a1f2e", pad=10, loc="left")
+    ax.set_xlim(0, max_v * 1.28)
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e6:.1f}M"))
+    ax.grid(axis="x", color="#f3f4f6", linewidth=0.8, zorder=0)
+    ax.set_axisbelow(True)
+    for sp in ["top", "right"]: ax.spines[sp].set_visible(False)
+    ax.spines["left"].set_color("#e5e7eb"); ax.spines["bottom"].set_color("#e5e7eb")
+    ax.tick_params(axis="x", labelsize=8, colors="#9ca3af")
+    ax.tick_params(axis="y", length=0)
+    ax.legend(loc="lower right", fontsize=8, frameon=True,
+              facecolor="white", edgecolor="#e5e7eb")
+    plt.tight_layout(pad=0.6)
+    return _chart_bytes(fig)
+
+
 # ── MAIN SECTIONS ─────────────────────────────────────────────────────────────
 
 def _sales_breakdown(parsed: dict, S: dict) -> list:
@@ -1020,24 +1060,29 @@ def _profitability(parsed: dict, S: dict) -> list:
         dcol = cols.get(col_key)
         if not dcol: continue
         agg   = _group_sale_gp(df, dcol, sale_col, gp_col)
-        agg_s = agg.sort_values('GP_Pct', ascending=False).reset_index(drop=True)
+        # Sort by Sale amount descending — classification by volume, GP% shown as info
+        agg_s = agg.sort_values('Sale', ascending=False).reset_index(drop=True)
         labels   = list(agg_s[dcol])
         pct_vals = list(agg_s['GP_Pct'])
         gp_vals  = list(agg_s['GP'])
         sale_vals= list(agg_s['Sale'])
         above    = sum(1 for v in pct_vals if v >= avg_pct)
+        best_pct_idx  = pct_vals.index(max(pct_vals))
+        worst_pct_idx = pct_vals.index(min(pct_vals))
         buf = _hbar_gp_dual_chart(labels, pct_vals, gp_vals, title, avg_pct)
-        desc = (f"<b>{labels[0]}</b> achieves the highest GP margin at "
-                f"<b>{pct_vals[0]:.1f}%</b> (GP: <b>{gp_vals[0]/1e6:.2f}M</b>), "
-                f"while <b>{labels[-1]}</b> has the lowest at "
-                f"<b>{pct_vals[-1]:.1f}%</b> (GP: <b>{gp_vals[-1]/1e6:.2f}M</b>). "
+        desc = (f"<b>{labels[0]}</b> has the highest sales volume at "
+                f"<b>{sale_vals[0]/1e6:.2f}M</b> (GP: <b>{pct_vals[0]:.1f}%</b>). "
+                f"Best GP margin: <b>{labels[best_pct_idx]}</b> at "
+                f"<b>{pct_vals[best_pct_idx]:.1f}%</b>; "
+                f"lowest: <b>{labels[worst_pct_idx]}</b> at "
+                f"<b>{pct_vals[worst_pct_idx]:.1f}%</b>. "
                 f"Overall average: <b>{avg_pct:.1f}%</b>. "
                 f"{above} of {len(labels)} perform above average.")
-        # Summary table
-        tbl_rows = [["", "GP Amount", "GP%", "Sales"]]
+        # Summary table — sorted by Sales descending (matches chart order)
+        tbl_rows = [["", "Sales", "GP Amount", "GP%"]]
         for lbl, gp, pct, sale in zip(labels, gp_vals, pct_vals, sale_vals):
-            tbl_rows.append([lbl, f"{gp/1e6:.2f}M", f"{pct:.1f}%", f"{sale/1e6:.2f}M"])
-        tbl = Table(tbl_rows, colWidths=[90,72,55,72])
+            tbl_rows.append([lbl, f"{sale/1e6:.2f}M", f"{gp/1e6:.2f}M", f"{pct:.1f}%"])
+        tbl = Table(tbl_rows, colWidths=[90,72,72,55])
         tbl.setStyle(TableStyle([
             ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#1a1f2e")),
             ("TEXTCOLOR",(0,0),(-1,0),colors.white),
@@ -1095,7 +1140,7 @@ def _receivables_section(parsed: dict, S: dict) -> list:
         for status in ["Overdue","Delayed","Partial","On Time"]:
             grp = df2[df2[status_col].str.strip() == status]
             if grp.empty: continue
-            grp_top = grp.nlargest(10, '_sale').sort_values('_sale', ascending=True).reset_index(drop=True)
+            grp_top = grp.nlargest(10, '_sale').sort_values('_sale', ascending=False).reset_index(drop=True)
             names  = [str(r[cust_col]) if cust_col else f"Cust {i+1}"
                       for i, (_, r) in enumerate(grp_top.iterrows())]
             values = list(grp_top['_sale'])
@@ -1125,151 +1170,209 @@ def _receivables_section(parsed: dict, S: dict) -> list:
         story.append(_chart_desc(desc, S))
         story.append(Spacer(1, 8))
 
-        # Top 10 by Before Due Date
-        top_before = df2.nlargest(10, '_before').sort_values('_before', ascending=True).reset_index(drop=True)
+        # Top 10 by Before Due Date — grouped bars (green=before, orange=after)
+        top_before = df2.nlargest(10, '_before').sort_values('_before', ascending=False).reset_index(drop=True)
         names_b = [str(r[cust_col]) if cust_col else f"C{i+1}" for i,(_, r) in enumerate(top_before.iterrows())]
-        buf_b = _stacked_hbar_chart(
+        buf_b = _grouped_hbar_chart(
             names_b, list(top_before['_before']), list(top_before['_after']),
             "Top 10 Customers — Received Before Due Date",
-            "Before Due Date", "After Due Date",
+            "Before Due Date (Green)", "After Due Date (Orange)",
             col_a="#059669", col_b="#ea580c")
-        story.append(_img_flowable(buf_b, W-80, max_height=320))
+        story.append(_img_flowable(buf_b, W-80, max_height=340))
         story.append(Spacer(1, 12))
 
-        # Top 10 by After Due Date
-        top_after = df2.nlargest(10, '_after').sort_values('_after', ascending=True).reset_index(drop=True)
+        # Top 10 by After Due Date — grouped bars (green=before, orange=after)
+        top_after = df2.nlargest(10, '_after').sort_values('_after', ascending=False).reset_index(drop=True)
         names_a = [str(r[cust_col]) if cust_col else f"C{i+1}" for i,(_, r) in enumerate(top_after.iterrows())]
-        buf_a = _stacked_hbar_chart(
+        buf_a = _grouped_hbar_chart(
             names_a, list(top_after['_before']), list(top_after['_after']),
             "Top 10 Customers — Received After Due Date",
-            "Before Due Date", "After Due Date",
+            "Before Due Date (Green)", "After Due Date (Orange)",
             col_a="#059669", col_b="#ea580c")
-        story.append(_img_flowable(buf_a, W-80, max_height=320))
+        story.append(_img_flowable(buf_a, W-80, max_height=340))
         story.append(Spacer(1, 16))
 
-    # ── Top 10 customers by Avg Payment Days — chart ─────────────────────────
+    # ── Top 10 Bad Pay Master & Top 10 Good Pay Master ───────────────────────
     if days_col and cust_col:
         story.append(Spacer(1, 8))
         df2 = df.copy()
         df2['_days'] = _num(df2, days_col)
-        slow = df2.nlargest(10, '_days').sort_values('_days', ascending=True).reset_index(drop=True)
-        names  = [str(r[cust_col]) for _, r in slow.iterrows()]
-        values = list(slow['_days'])
-        overall_avg = float(df2['_days'].mean())
-        # Custom chart with avg line
-        fig, ax = plt.subplots(figsize=(6.8, max(3.5, 10*0.48)))
-        fig.patch.set_facecolor("white")
-        y = np.arange(len(names))
-        ax.barh(y, values, color="#7c3aed", height=0.55, edgecolor="none", zorder=3)
-        for i, v in enumerate(values):
-            ax.text(v+overall_avg*0.01, i, f"{v:.0f}d", va="center", ha="left",
-                    fontsize=8.5, color="#1a1f2e", fontweight="600")
-        ax.axvline(overall_avg, color="#6b7280", linewidth=1.2, linestyle="--", zorder=4)
-        ax.text(overall_avg+overall_avg*0.01, len(names)-0.5,
-                f"Avg {overall_avg:.1f}d", va="top", ha="left", fontsize=7.5,
-                color="#6b7280", fontstyle="italic")
-        ax.set_yticks(y); ax.set_yticklabels(names, fontsize=9, color="#1a1f2e")
-        ax.invert_yaxis()
-        ax.set_title("Top 10 Slowest Payers — Avg Payment Days", fontsize=11,
-                     fontweight="700", color="#1a1f2e", pad=10, loc="left")
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x,_: f"{x:.0f}d"))
-        ax.grid(axis="x", color="#f3f4f6", linewidth=0.8, zorder=0)
-        ax.set_axisbelow(True)
-        for sp in ["top","right"]: ax.spines[sp].set_visible(False)
-        ax.spines["left"].set_color("#e5e7eb"); ax.spines["bottom"].set_color("#e5e7eb")
-        ax.tick_params(axis="x", labelsize=8, colors="#9ca3af")
-        ax.tick_params(axis="y", length=0)
-        plt.tight_layout(pad=0.6)
-        buf = _chart_bytes(fig)
-        desc = (f"<b>{slow.iloc[-1][cust_col]}</b> takes the longest at "
-                f"<b>{slow.iloc[-1]['_days']:.0f} days</b>. "
-                f"Overall average: <b>{overall_avg:.1f} days</b>.")
-        story.append(KeepTogether([_img_flowable(buf, W-80), _chart_desc(desc, S)]))
+        df_with_days = df2[df2['_days'] > 0]  # only customers with actual payment data
+        overall_avg  = float(df_with_days['_days'].mean()) if len(df_with_days) > 0 else 0
+
+        def _days_chart(subset, title, color, sort_asc):
+            subset = subset.sort_values('_days', ascending=sort_asc).reset_index(drop=True)
+            names  = [str(r[cust_col]) for _, r in subset.iterrows()]
+            values = list(subset['_days'])
+            fig, ax = plt.subplots(figsize=(6.8, max(3.5, len(names)*0.48)))
+            fig.patch.set_facecolor("white")
+            y = np.arange(len(names))
+            ax.barh(y, values, color=color, height=0.55, edgecolor="none", zorder=3)
+            for i, v in enumerate(values):
+                ax.text(v + overall_avg*0.01, i, f"{v:.0f}d", va="center", ha="left",
+                        fontsize=8.5, color="#1a1f2e", fontweight="600")
+            ax.axvline(overall_avg, color="#6b7280", linewidth=1.2, linestyle="--", zorder=4)
+            ax.text(overall_avg + overall_avg*0.01, len(names)-0.5,
+                    f"Avg {overall_avg:.1f}d", va="top", ha="left", fontsize=7.5,
+                    color="#6b7280", fontstyle="italic")
+            ax.set_yticks(y); ax.set_yticklabels(names, fontsize=9, color="#1a1f2e")
+            ax.invert_yaxis()
+            ax.set_title(title, fontsize=11, fontweight="700", color="#1a1f2e", pad=10, loc="left")
+            ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0f}d"))
+            ax.grid(axis="x", color="#f3f4f6", linewidth=0.8, zorder=0)
+            ax.set_axisbelow(True)
+            for sp in ["top","right"]: ax.spines[sp].set_visible(False)
+            ax.spines["left"].set_color("#e5e7eb"); ax.spines["bottom"].set_color("#e5e7eb")
+            ax.tick_params(axis="x", labelsize=8, colors="#9ca3af")
+            ax.tick_params(axis="y", length=0)
+            plt.tight_layout(pad=0.6)
+            return _chart_bytes(fig), names, values
+
+        # Bad Pay Master — 10 with highest avg_days, descending (highest at top)
+        bad = df_with_days.nlargest(min(10, len(df_with_days)), '_days')
+        if not bad.empty:
+            buf_bad, names_bad, vals_bad = _days_chart(
+                bad, "Top 10 Bad Pay Master — Avg Payment Days", "#C31D27", sort_asc=False)
+            desc_bad = (f"<b>{names_bad[0]}</b> takes the longest at "
+                        f"<b>{vals_bad[0]:.0f} days</b>. "
+                        f"Overall average: <b>{overall_avg:.1f} days</b>.")
+            story.append(KeepTogether([_img_flowable(buf_bad, W-80), _chart_desc(desc_bad, S)]))
+            story.append(Spacer(1, 12))
+
+        # Good Pay Master — 10 with lowest avg_days (> 0), ascending (lowest at top)
+        good = df_with_days.nsmallest(min(10, len(df_with_days)), '_days')
+        if not good.empty:
+            buf_good, names_good, vals_good = _days_chart(
+                good, "Top 10 Good Pay Master — Avg Payment Days", "#059669", sort_asc=True)
+            desc_good = (f"<b>{names_good[0]}</b> pays fastest at "
+                         f"<b>{vals_good[0]:.0f} days</b>. "
+                         f"Overall average: <b>{overall_avg:.1f} days</b>.")
+            story.append(KeepTogether([_img_flowable(buf_good, W-80), _chart_desc(desc_good, S)]))
 
     story.append(PageBreak()); return story
 
 
 def _customer_detail_section(parsed: dict, S: dict) -> list:
-    """Customer Detail — Top 10 by Sales with full columns."""
+    """Customer Detail — Top 10 and Bottom 10 by Sales with full columns."""
     story = []
     story.append(Paragraph("Customer Detail", S["h2"]))
     story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#e5e7eb"),
                              spaceBefore=2, spaceAfter=10))
     df   = _get_raw_df(parsed)
     cols = _detect_cols(df)
-    sale_col  = cols['sale'];  gp_col    = cols['gp']
-    cust_col  = cols['customer']; city_col = cols['city']
-    status_col= cols['payment_status']; days_col = cols['avg_days']
-    term_col  = cols['credit_term'];  limit_col = cols['credit_limit']
+    sale_col   = cols['sale'];      gp_col    = cols['gp']
+    cust_col   = cols['customer'];  city_col  = cols['city']
+    region_col = cols['region'];    btype_col = cols['business_type']
+    days_col   = cols['avg_days'];  recv_col  = cols['total_received']
+    term_col   = cols['credit_term']; limit_col = cols['credit_limit']
+    before_col = cols['before_due']; after_col = cols['after_due']
+
     if not sale_col or not cust_col:
         story.append(PageBreak()); return story
 
     df2 = df.copy()
-    df2['_sale'] = _num(df2, sale_col); df2['_gp'] = _num(df2, gp_col)
-    if days_col: df2['_days'] = _num(df2, days_col)
+    df2['_sale']   = _num(df2, sale_col)
+    df2['_gp']     = _num(df2, gp_col)
+    df2['_recv']   = _num(df2, recv_col)   if recv_col   else pd.Series(0.0, index=df2.index)
+    df2['_before'] = _num(df2, before_col) if before_col else pd.Series(0.0, index=df2.index)
+    df2['_after']  = _num(df2, after_col)  if after_col  else pd.Series(0.0, index=df2.index)
+    df2['_days']   = _num(df2, days_col)   if days_col   else pd.Series(0.0, index=df2.index)
     total_sale = df2['_sale'].sum()
-    top_df = df2.nlargest(10, '_sale').reset_index(drop=True)
 
-    story.append(Paragraph("Top 10 Customers by Sales", S["h3"]))
+    # Column widths — 14 cols must fit in ~436 pts
+    # #(13) Customer(72) BizType(35) Region(30) City(28) CrTerm(38) CrLmt(28)
+    # Sale(28) GP(26) GP%(24) RcvBef(32) RcvAft(30) NotRcvd(30) AvgDays(32) = 436
+    COL_W = [13, 72, 35, 30, 28, 38, 28, 28, 26, 24, 32, 30, 30, 32]
 
-    # Column widths — total must fit within page margins (~436 pts)
-    # Use Paragraph for wrapping cells so long names never get cut off
-    COL_W = [22, 106, 44, 52, 38, 36, 34, 30, 44, 30]  # sum = 436
-    STATUS_COLOR = {"on time":"#059669","delayed":"#ea580c","partial":"#2563eb","overdue":"#C31D27"}
-
-    def _cell(text, bold=False, align="LEFT", color="#1f2937", size=7):
+    def _cell(text, bold=False, align="CENTER", color="#1f2937", size=6.5):
         st = ParagraphStyle(
             "tc", fontSize=size, fontName="Helvetica-Bold" if bold else "Helvetica",
-            textColor=colors.HexColor(color), alignment=TA_CENTER if align=="CENTER" else TA_LEFT,
-            leading=9, spaceAfter=0, spaceBefore=0,
+            textColor=colors.HexColor(color),
+            alignment=TA_CENTER if align == "CENTER" else TA_LEFT,
+            leading=8, spaceAfter=0, spaceBefore=0,
         )
         return Paragraph(str(text), st)
 
-    # Header row — white text on dark background
-    hdr_style = ParagraphStyle("th", fontSize=7, fontName="Helvetica-Bold",
-                               textColor=colors.white, alignment=TA_CENTER, leading=9)
-    hdr_row = [Paragraph(h, hdr_style) for h in
-               ["#","Customer","City","Credit Term","Cr.Limit","Sale","GP","GP%","Status","Days"]]
+    hdr_style = ParagraphStyle("th", fontSize=6.5, fontName="Helvetica-Bold",
+                               textColor=colors.white, alignment=TA_CENTER, leading=8)
+    HEADERS = ["#", "Customer", "Biz Type", "Region", "City",
+               "Cr Term", "Cr Lmt", "Sale", "GP", "GP%",
+               "Rcv Before", "Rcv After", "Not Rcvd", "Avg Pay Days"]
 
-    tbl_rows = [hdr_row]
-    for i, row in top_df.iterrows():
-        s=row['_sale']; g=row['_gp']
-        cust = str(row[cust_col]) if cust_col else "-"
-        city = str(row[city_col]) if city_col and pd.notna(row.get(city_col)) else "-"
-        term = str(row[term_col]) if term_col and pd.notna(row.get(term_col)) else "-"
-        lim  = f"{float(row[limit_col])/1e6:.2f}M" if limit_col and pd.notna(row.get(limit_col)) else "-"
-        st   = str(row[status_col]) if status_col and pd.notna(row.get(status_col)) else "-"
-        st_c = STATUS_COLOR.get(st.lower(), "#1f2937")
-        tbl_rows.append([
-            _cell(str(i+1), align="CENTER"),
-            _cell(cust),                           # wraps automatically
-            _cell(city),
-            _cell(term),                           # wraps automatically
-            _cell(lim, align="CENTER"),
-            _cell(f"{s/1e6:.2f}M", align="CENTER"),
-            _cell(f"{g/1e6:.2f}M", align="CENTER"),
-            _cell(f"{g/s*100:.1f}%" if s>0 else "-", align="CENTER"),
-            _cell(st, bold=True, align="CENTER", color=st_c),
-            _cell(f"{row['_days']:.0f}d" if days_col else "-", align="CENTER"),
-        ])
+    def _build_rows(subset_df):
+        rows = [[Paragraph(h, hdr_style) for h in HEADERS]]
+        for rank, (_, row) in enumerate(subset_df.iterrows(), 1):
+            s  = row['_sale']; g = row['_gp']
+            rv = row['_recv']; bf = row['_before']; af = row['_after']
+            not_rcvd = max(s - rv, 0)
+            cust  = str(row[cust_col]) if cust_col else "-"
+            btype = str(row[btype_col]) if btype_col and pd.notna(row.get(btype_col)) else "-"
+            reg   = str(row[region_col]) if region_col and pd.notna(row.get(region_col)) else "-"
+            city  = str(row[city_col])   if city_col  and pd.notna(row.get(city_col))   else "-"
+            term  = str(row[term_col])   if term_col  and pd.notna(row.get(term_col))   else "-"
+            lim   = (f"{float(row[limit_col])/1e6:.1f}M"
+                     if limit_col and pd.notna(row.get(limit_col)) else "-")
+            days_v = f"{row['_days']:.0f}d" if row['_days'] > 0 else "-"
+            rows.append([
+                _cell(str(rank)),
+                _cell(cust,  align="LEFT"),
+                _cell(btype, align="LEFT"),
+                _cell(reg),
+                _cell(city),
+                _cell(term,  align="LEFT"),
+                _cell(lim),
+                _cell(f"{s/1e6:.2f}M"),
+                _cell(f"{g/1e6:.2f}M"),
+                _cell(f"{g/s*100:.1f}%" if s > 0 else "-"),
+                _cell(f"{bf/1e6:.2f}M" if bf > 0 else "-"),
+                _cell(f"{af/1e6:.2f}M" if af > 0 else "-"),
+                _cell(f"{not_rcvd/1e6:.2f}M" if not_rcvd > 0 else "-"),
+                _cell(days_v),
+            ])
+        return rows
 
-    tbl = Table(tbl_rows, colWidths=COL_W, repeatRows=1)
-    tbl.setStyle(TableStyle([
-        ("BACKGROUND",     (0,0),(-1,0),  colors.HexColor("#1a1f2e")),
-        ("ROWBACKGROUNDS", (0,1),(-1,-1), [colors.white, colors.HexColor("#f9fafb")]),
-        ("GRID",           (0,0),(-1,-1), 0.4, colors.HexColor("#e5e7eb")),
-        ("TOPPADDING",     (0,0),(-1,-1), 4),
-        ("BOTTOMPADDING",  (0,0),(-1,-1), 4),
-        ("LEFTPADDING",    (0,0),(-1,-1), 4),
-        ("RIGHTPADDING",   (0,0),(-1,-1), 4),
-        ("VALIGN",         (0,0),(-1,-1), "MIDDLE"),
-    ]))
-    story.append(tbl); story.append(Spacer(1,6))
+    tbl_style = TableStyle([
+        ("BACKGROUND",     (0, 0), (-1, 0),  colors.HexColor("#1a1f2e")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f9fafb")]),
+        ("GRID",           (0, 0), (-1, -1), 0.4, colors.HexColor("#e5e7eb")),
+        ("TOPPADDING",     (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING",  (0, 0), (-1, -1), 2),
+        ("LEFTPADDING",    (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING",   (0, 0), (-1, -1), 3),
+        ("VALIGN",         (0, 0), (-1, -1), "MIDDLE"),
+    ])
+
+    # ── Top 10 ───────────────────────────────────────────────────────────────
+    top_df = df2.nlargest(10, '_sale').reset_index(drop=True)
+    story.append(Paragraph("Top 10 Customers by Sales", S["h3"]))
+    top_tbl = Table(_build_rows(top_df), colWidths=COL_W, repeatRows=1)
+    top_tbl.setStyle(tbl_style)
+    story.append(top_tbl)
+    story.append(Spacer(1, 6))
     top10_sale = top_df['_sale'].sum()
     story.append(_chart_desc(
-        f"The top 10 customers account for <b>{top10_sale/1e6:.2f}M</b> "
+        f"Top 10 customers account for <b>{top10_sale/1e6:.2f}M</b> "
         f"({top10_sale/total_sale*100:.1f}% of total sales). "
-        f"Customers with Overdue or Delayed status require priority collections attention.", S))
+        f"'Not Rcvd' = Sale minus Total Received (outstanding balance).", S))
+
+    story.append(PageBreak())
+
+    # ── Bottom 10 ─────────────────────────────────────────────────────────────
+    story.append(Paragraph("Customer Detail (continued)", S["h2"]))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#e5e7eb"),
+                             spaceBefore=2, spaceAfter=10))
+    story.append(Paragraph("Bottom 10 Customers by Sales", S["h3"]))
+    bot_df = df2.nsmallest(10, '_sale').sort_values('_sale', ascending=True).reset_index(drop=True)
+    bot_tbl = Table(_build_rows(bot_df), colWidths=COL_W, repeatRows=1)
+    bot_tbl.setStyle(tbl_style)
+    story.append(bot_tbl)
+    story.append(Spacer(1, 6))
+    bot10_sale = bot_df['_sale'].sum()
+    story.append(_chart_desc(
+        f"Bottom 10 customers contribute only <b>{bot10_sale/1e6:.2f}M</b> "
+        f"({bot10_sale/total_sale*100:.1f}% of total sales). "
+        f"These accounts may warrant a review for growth or rationalisation.", S))
+
     story.append(PageBreak()); return story
 
 def _rank_table(groups, accent_hex: str):
