@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+
+:root {
+  --ics-red:       #C31D27;
+  --ics-red-dark:  #a31721;
+  --ics-red-light: #fdf1f2;
+  --ics-red-mid:   #fad0d3;
+  --bg:            #f0f2f5;
+  --surface:       #ffffff;
+  --surface2:      #f7f8fa;
+  --surface3:      #f0f2f5;
+  --border:        #e2e5ea;
+  --border2:       #dde0e6;
+  --text:          #1a1f2e;
+  --text2:         #374151;
+  --muted:         #6b7280;
+  --muted2:        #9aa0ad;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #dde0e6; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #9aa0ad; }
+
+/* Dot loader animation */
+@keyframes thinking {
+  0%, 80%, 100% { opacity: 0.2; transform: scale(0.75); }
+  40% { opacity: 1; transform: scale(1); }
+}
+.dot-1 { animation: thinking 1.5s ease-in-out infinite; }
+.dot-2 { animation: thinking 1.5s ease-in-out 0.22s infinite; }
+.dot-3 { animation: thinking 1.5s ease-in-out 0.44s infinite; }
+
+/* Status dot pulse */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.85); }
+}
+
+/* Report button spinner */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* Message entrance */
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.msg-appear { animation: msg-in 0.22s ease-out forwards; }
+
+/* Smooth chat scroll */
+.chat-scroll { scroll-behavior: smooth; }
+
+/* Source table row hover */
+.src-row td { transition: background 0.1s; }
+.src-row:hover td { background: #fdf1f2 !important; }
+
+/* Textarea */
+textarea { resize: none; }
+textarea:focus { outline: none; }
+
+/* Selection */
+::selection { background: rgba(195, 29, 39, 0.15); color: inherit; }
